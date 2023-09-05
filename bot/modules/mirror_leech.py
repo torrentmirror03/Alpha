@@ -3,6 +3,7 @@ from pyrogram.filters import command, regex
 from html import escape
 from base64 import b64encode
 from re import match as re_match
+from urllib.parse import unquote
 from asyncio import sleep
 from aiofiles import open as aiopen
 from aiofiles.os import path as aiopath
@@ -223,9 +224,9 @@ async def _mirror_leech(client, message, isQbit=False, isLeech=False, sameDir=No
         await delete_links(message)
         return
 
-    org_link = None
+    org_link, headers, multiAria = None, '', []
     if link:
-        LOGGER.info(link)
+        LOGGER.info(f"Link: {link}")
         org_link = link
 
     if not is_mega_link(link) and not isQbit and not is_magnet(link) and not is_rclone_path(link) \
@@ -235,6 +236,14 @@ async def _mirror_leech(client, message, isQbit=False, isLeech=False, sameDir=No
             process_msg = await sendMessage(message, f"<i><b>Processing:</b></i> <code>{link}</code>")
             try:
                 link = await sync_to_async(direct_link_generator, link)
+                if isinstance(link, list):
+                    link, headers = link
+                    if isinstance(link, dict):
+                        multiAria = [link, headers, unquote(org_link.rstrip('/').rsplit('/', 1)[1])]
+                        link = list(multiAria[0].keys())[0]
+                        if (folder_name := multiAria[0][link]):
+                            path += "/" + folder_name
+                        multiAria[0].pop(link)
                 LOGGER.info(f"Generated link: {link}")
                 await editMessage(process_msg, f"<i><b>Generated link:</b></i> <code>{link}</code>")
             except DirectDownloadLinkException as e:
@@ -318,7 +327,8 @@ async def _mirror_leech(client, message, isQbit=False, isLeech=False, sameDir=No
             return
 
     listener = MirrorLeechListener(message, compress, extract, isQbit, isLeech, tag, select, seed, 
-                                    sameDir, rcf, up, join, drive_id=drive_id, index_link=index_link, source_url=org_link if org_link else link)
+                                    sameDir, rcf, up, join, drive_id=drive_id, index_link=index_link, 
+                                    source_url=org_link if org_link else link, multiAria=multiAria)
 
     if file_ is not None:
         await delete_links(message)
@@ -347,10 +357,8 @@ async def _mirror_leech(client, message, isQbit=False, isLeech=False, sameDir=No
         pssw = args['-p'] or args['-pass']
         if ussr or pssw:
             auth = f"{ussr}:{pssw}"
-            auth = "Basic " + b64encode(auth.encode()).decode('ascii')
-        else:
-            auth = ''
-        await add_aria2c_download(link, path, listener, name, auth, ratio, seed_time)
+            headers = f"authorization: Basic {b64encode(auth.encode()).decode('ascii')}"
+        await add_aria2c_download(link, path, listener, name, headers, ratio, seed_time)
     await delete_links(message)
 
 

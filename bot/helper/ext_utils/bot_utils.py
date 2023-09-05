@@ -167,11 +167,10 @@ def get_all_versions():
         vr = ''
     bot_cache['eng_versions'] = {'p7zip':vp, 'ffmpeg': vf, 'rclone': vr,
                                     'aria': aria2.client.get_version()['version'],
-                                    'aiohttp': get_distribution('aiohttp').version,
                                     'gapi': get_distribution('google-api-python-client').version,
                                     'mega': MegaApi('test').getVersion(),
                                     'qbit': get_client().app.version,
-                                    'pyro': get_distribution('pyrogram').version,
+                                    'pyro': get_distribution('pyrofork').version,
                                     'ytdlp': get_distribution('yt-dlp').version}
 
 
@@ -181,11 +180,10 @@ class EngineStatus:
             get_all_versions()
             version_cache = bot_cache.get('eng_versions')
         self.STATUS_ARIA = f"Aria2 v{version_cache['aria']}"
-        self.STATUS_AIOHTTP = f"AioHttp {version_cache['aiohttp']}"
         self.STATUS_GD = f"Google-API v{version_cache['gapi']}"
         self.STATUS_MEGA = f"MegaSDK v{version_cache['mega']}"
         self.STATUS_QB = f"qBit {version_cache['qbit']}"
-        self.STATUS_TG = f"Pyrogram v{version_cache['pyro']}"
+        self.STATUS_TG = f"PyroFork v{version_cache['pyro']}"
         self.STATUS_YT = f"yt-dlp v{version_cache['ytdlp']}"
         self.STATUS_EXT = "pExtract v2"
         self.STATUS_SPLIT_MERGE = f"ffmpeg v{version_cache['ffmpeg']}"
@@ -338,6 +336,10 @@ def is_telegram_link(url):
 
 def is_share_link(url):
     return bool(re_match(r'https?:\/\/.+\.gdtot\.\S+|https?:\/\/(filepress|filebee|appdrive|gdflix)\.\S+', url))
+
+
+def is_index_link(url):
+    return bool(re_match(r'https?:\/\/.+\/\d+\:\/', url))
 
 
 def is_mega_link(url):
@@ -497,6 +499,7 @@ async def get_stats(event, key="home"):
         total, used, free, disk = disk_usage('/')
         swap = swap_memory()
         memory = virtual_memory()
+        disk_io = disk_io_counters()
         msg = BotTheme('BOT_STATS',
             bot_uptime=get_readable_time(time() - botStartTime),
             ram_bar=get_progress_bar_string(memory.percent),
@@ -511,8 +514,8 @@ async def get_stats(event, key="home"):
             swap_t=get_readable_file_size(swap.total),
             disk=disk,
             disk_bar=get_progress_bar_string(disk),
-            disk_read=get_readable_file_size(disk_io_counters().read_bytes) + f" ({get_readable_time(disk_io_counters().read_time / 1000)})",
-            disk_write=get_readable_file_size(disk_io_counters().write_bytes) + f" ({get_readable_time(disk_io_counters().write_time / 1000)})",
+            disk_read=get_readable_file_size(disk_io.read_bytes) + f" ({get_readable_time(disk_io.read_time / 1000)})" if disk_io else "Access Denied",
+            disk_write=get_readable_file_size(disk_io.write_bytes) + f" ({get_readable_time(disk_io.write_time / 1000)})" if disk_io else "Access Denied",
             disk_t=get_readable_file_size(total),
             disk_u=get_readable_file_size(used),
             disk_f=get_readable_file_size(free),
@@ -542,7 +545,7 @@ async def get_stats(event, key="home"):
         if await aiopath.exists('.git'):
             last_commit = (await cmd_exec("git log -1 --pretty='%cd ( %cr )' --date=format-local:'%d/%m/%Y'", True))[0]
             changelog = (await cmd_exec("git log -1 --pretty=format:'<code>%s</code> <b>By</b> %an'", True))[0]
-        official_v = (await cmd_exec("curl -o latestversion.py https://raw.githubusercontent.com/weebzone/WZML-X/master/bot/version.py -s && python3 latestversion.py && rm latestversion.py", True))[0]
+        official_v = (await cmd_exec(f"curl -o latestversion.py https://raw.githubusercontent.com/weebzone/WZML-X/{config_dict['UPSTREAM_BRANCH']}/bot/version.py -s && python3 latestversion.py && rm latestversion.py", True))[0]
         msg = BotTheme('REPO_STATS',
             last_commit=last_commit,
             bot_version=get_version(),

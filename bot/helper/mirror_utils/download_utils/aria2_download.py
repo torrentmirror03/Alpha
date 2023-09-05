@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from random import SystemRandom
+from string import ascii_letters, digits
 from aiofiles.os import remove as aioremove, path as aiopath
 
 from bot import aria2, download_dict_lock, download_dict, LOGGER, config_dict, aria2_options, aria2c_global, non_queued_dl, queue_dict_lock
@@ -8,14 +10,14 @@ from bot.helper.telegram_helper.message_utils import sendStatusMessage, sendMess
 from bot.helper.ext_utils.task_manager import is_queued
 
 
-async def add_aria2c_download(link, path, listener, filename, auth, ratio, seed_time):
+async def add_aria2c_download(link, path, listener, filename, headers, ratio, seed_time, isMulti=False):
     a2c_opt = {**aria2_options}
     [a2c_opt.pop(k) for k in aria2c_global if k in aria2_options]
     a2c_opt['dir'] = path
     if filename:
         a2c_opt['out'] = filename
-    if auth:
-        a2c_opt['header'] = f"authorization: {auth}"
+    if headers:
+        a2c_opt['header'] = headers
     if ratio:
         a2c_opt['seed-ratio'] = ratio
     if seed_time:
@@ -45,8 +47,7 @@ async def add_aria2c_download(link, path, listener, filename, auth, ratio, seed_
     gid = download.gid
     name = download.name
     async with download_dict_lock:
-        download_dict[listener.uid] = Aria2Status(
-            gid, listener, queued=added_to_queue)
+        download_dict[listener.uid] = Aria2Status(gid, listener, queued=added_to_queue)
     if added_to_queue:
         LOGGER.info(f"Added to Queue/Download: {name}. Gid: {gid}")
         if not listener.select or not download.is_torrent:
@@ -59,7 +60,8 @@ async def add_aria2c_download(link, path, listener, filename, auth, ratio, seed_
     await listener.onDownloadStart()
 
     if not added_to_queue and (not listener.select or not config_dict['BASE_URL']):
-        await sendStatusMessage(listener.message)
+        if not isMulti:
+            await sendStatusMessage(listener.message)
     elif listener.select and download.is_torrent and not download.is_metadata:
         if not added_to_queue:
             await sync_to_async(aria2.client.force_pause, gid)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from base64 import b64decode
+from base64 import b64decode, b64encode
 from http.cookiejar import MozillaCookieJar
 from json import loads
 from os import path
@@ -12,11 +12,10 @@ from bs4 import BeautifulSoup
 from cloudscraper import create_scraper
 from lk21 import Bypass
 from lxml import etree
-from requests import session
-import requests
+from requests import Session
 
 from bot import LOGGER, config_dict
-from bot.helper.ext_utils.bot_utils import get_readable_time, is_share_link
+from bot.helper.ext_utils.bot_utils import get_readable_time, is_share_link, is_index_link
 from bot.helper.ext_utils.exceptions import DirectDownloadLinkException
 
 fmed_list = ['fembed.net', 'fembed.com', 'femax20.com', 'fcdn.stream', 'feurl.com', 'layarkacaxxi.icu',
@@ -56,6 +55,10 @@ def direct_link_generator(link: str):
         raise DirectDownloadLinkException("ERROR: Use ytdl cmds for Youtube links")
     elif config_dict['DEBRID_API_KEY'] and any(x in domain for x in debrid_sites):
         return debrid_extractor(link)
+    elif 'gofile.io' in domain:
+        return gofile_dl(link)
+    elif any(x in domain for x in ['send.cm', 'desiupload.co']):
+        return nURL_resolver(link)
     elif 'yadi.sk' in domain or 'disk.yandex.com' in domain:
         return yandex_disk(link)
     elif 'mediafire.com' in domain:
@@ -104,6 +107,8 @@ def direct_link_generator(link: str):
         return fembed(link)
     elif any(x in domain for x in ['sbembed.com', 'watchsb.com', 'streamsb.net', 'sbplay.org']):
         return sbembed(link)
+    elif is_index_link(link) and link.endswith('/'):
+        return gdindex(link)
     elif is_share_link(link):
         if 'gdtot' in domain:
             return gdtot(link)
@@ -118,17 +123,109 @@ def direct_link_generator(link: str):
 
 
 def debrid_extractor(url: str) -> str:
-    """ Debrid Link Extractor (VPN Must)"""
+    """ Debrid Link Extractor (VPN Must)
+    Based on https://github.com/weebzone/WZML-X (SilentDemonSD) """
     cget = create_scraper().request
-    try:
-        resp = cget('POST', f"https://api.real-debrid.com/rest/1.0/unrestrict/link?auth_token={config_dict['DEBRID_API_KEY']}", data={'link': url})
-        if resp.status_code == 200:
-            return resp.json()['download']
+    resp = cget('POST', f"https://api.real-debrid.com/rest/1.0/unrestrict/link?auth_token={config_dict['DEBRID_API_KEY']}", data={'link': url})
+    if resp.status_code == 200:
+        return resp.json()['download']
+    else:
+        raise DirectDownloadLinkException(f"ERROR: {resp['error']}")
+
+
+def gofile_dl(url: str):
+    """ GoFile DL (Nested Folder Support Added)
+    Based on https://github.com/weebzone/WZML-X"""
+    rget = Session()
+    resp = rget.get('https://api.gofile.io/createAccount')
+    if resp.status_code == 200:
+        data = resp.json()
+        if data['status'] == 'ok' and data.get('data', {}).get('token', None):
+            token = data['data']['token']
         else:
-            raise DirectDownloadLinkException(f"ERROR: {resp['error']}")
-    except Exception as e:
-        raise DirectDownloadLinkException(f"ERROR: {e.__class__.__name__}")
+            raise DirectDownloadLinkException(f'ERROR: Failed to Create GoFile Account')
+    else:
+        raise DirectDownloadLinkException(f'ERROR: GoFile Server Response Failed')
+    headers = f'Cookie: accountToken={token}'
+    def getNextedFolder(contentId, path):
+        params = {'contentId': contentId, 'token': token, 'websiteToken': '7fd94ds12fds4'}
+        res = rget.get('https://api.gofile.io/getContent', params=params)
+        if res.status_code == 200:
+            json_data = res.json()
+            if json_data['status'] == 'ok':
+                links = {}
+                for content in json_data['data']['contents'].values():
+                    if content["type"] == "folder":
+                        path = path+"/"+content['name']
+                        links.update(getNextedFolder(content['id'], path))
+                    elif content["type"] == "file":
+                        links[content['link']] = path
+                return links
+            else:
+                raise DirectDownloadLinkException(f'ERROR: Failed to Receive All Files List')
+        else:
+            raise DirectDownloadLinkException(f'ERROR: GoFile Server Response Failed')
+    return [getNextedFolder(url[url.rfind('/')+1:], ""), headers]
+
+
+def nURL_resolver(url: str):
+    """ NodeJS URL Resolver
+    Based on https://github.com/mnsrulz/nurlresolver/tree/master/src/libs"""
+    cget = create_scraper().request
+    resp = cget('GET', f"https://nurlresolver.netlify.app/.netlify/functions/server/resolve?q={url}&m=&r=false").json()
+    if len(resp) == 0:
+        raise DirectDownloadLinkException(f'ERROR: Failed to extract Direct Link!')
+    headers = ""
+    for header, value in (resp[0].get("headers", {})).items():
+        headers = f"{header}: {value}"
+    return [resp[0].get("link"), headers]
+
+page_token, turn_page = '', False
+def gdindex(url: str, usr: str = None, pswd: str = None):
+    """ Google-Drive-Index Scrapper
+    Based on AnimeKaizoku, Modified Nested Folders via SilentDemonSD"""
+    links, path, pgNo = {}, '', 0
+    global page_token, turn_page
     
+    def authenticate(user, password):
+        return "Basic " + b64encode(f"{user}:{password}".encode()).decode('ascii')
+    
+    def gdindexScrape(link, auth, payload, npath):
+        global page_token, turn_page
+        link = link.rstrip('/') + '/'
+        cget = create_scraper(allow_brotli=False).request
+        resp = cget('POST', link, data=payload, headers= {"authorization": auth} if auth else {})
+        if resp.status_code != 200:
+            raise DirectDownloadLinkException("ERROR: Could not Access your Entered URL!, Check your Username / Password")
+        try: 
+            nresp = loads(b64decode((resp.text)[::-1][24:-20]).decode('utf-8'))
+        except: 
+            raise DirectDownloadLinkException("ERROR: Something Went Wrong. Check Index Link / Username / Password Valid or Not")
+        if (new_page_token := nresp.get("nextPageToken", False)):
+            turn_page = True
+            page_token = new_page_token
+        
+        if list(nresp.get("data").keys())[0] == "error":
+            raise DirectDownloadLinkException("Nothing Found in your provided URL")
+        
+        data = {}
+        files = nresp["data"]["files"]
+        for i, _ in enumerate(range(len(files))):
+            files_name = files[i]["name"]
+            dl_link = f"{link}{quote(files_name)}"
+            if files[i]["mimeType"] == "application/vnd.google-apps.folder":
+                data.update(gdindexScrape(dl_link, auth, {"page_token": page_token, "page_index": 0}, npath + f"/{files_name}"))
+            else:
+                data[dl_link] = npath
+        return data
+
+    auth = authenticate(usr, pswd) if usr and pswd else None
+    links.update(gdindexScrape(url, auth, {"page_token": page_token, "page_index": pgNo}, path))
+    while turn_page == True:
+        links.update(gdindexScrape(url, auth, {"page_token": page_token, "page_index": pgNo}, path))
+        pgNo += 1
+    return [links, f"authorization: {auth}" if auth else ""]
+
 
 def yandex_disk(url: str) -> str:
     """ Yandex.Disk direct link generator
@@ -142,8 +239,7 @@ def yandex_disk(url: str) -> str:
     try:
         return cget('get', api.format(link)).json()['href']
     except KeyError:
-        raise DirectDownloadLinkException(
-            "ERROR: File not found/Download limit reached")
+        raise DirectDownloadLinkException("ERROR: File not found/Download limit reached")
 
 
 def uptobox(url: str) -> str:
@@ -769,6 +865,3 @@ def route_intercept(route, request):
         route.abort()
     else:
         route.continue_()
-
-
-
